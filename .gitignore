@@ -1,0 +1,125 @@
+# Build directories
+build/
+Build/
+bin/
+Bin/
+obj/
+Obj/
+out/
+x64/
+x86/
+Debug/
+Release/
+RelWithDebInfo/
+MinSizeRel/
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.userprefs
+*.aps
+*.ncb
+*.opendb
+*.opensdf
+*.sdf
+*.cachefile
+*.VC.db
+*.VC.VC.opendb
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# MSI Installers
+*.msi
+*.msm
+*.wixobj
+*.wixpdb
+
+# Logs
+*.log
+logs/
+*.tlog
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# vcpkg
+vcpkg_installed/
+.vcpkg/
+
+# Dependencies
+dependencies/
+third-party/
+
+# Temporary files
+*.tmp
+*.temp
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux
+*~
+*.swp
+*.swo
+
+# IDE
+*.iml
+.idea/
+
+# Package files
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+
+# Exclude generated files but keep template files
+version.h
+!version.h.in
+rsversion.h
+!rsversion.h.in
+
+# Keep important files
+!*.md
+!LICENSE
+!version.txt

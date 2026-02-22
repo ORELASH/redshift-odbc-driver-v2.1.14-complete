@@ -1,0 +1,234 @@
+name: Build Amazon Redshift ODBC Driver MSI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - Ov2.1.13F1.0.0-BLL
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g., 2.1.13.0)'
+        required: false
+        default: '2.1.13.0'
+
+env:
+  BUILD_TYPE: Release
+  DRIVER_VERSION: '2.1.13.0'
+
+jobs:
+  build-windows-msi:
+    name: Build Windows x64 MSI
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v1.3
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: 'a42af01b72c28a8e1d7b48107b33e4f286a55ef6'
+
+      - name: Install WiX Toolset
+        run: |
+          echo "Downloading WiX Toolset..."
+          Invoke-WebRequest -Uri "https://github.com/wixtoolset/wix3/releases/download/wix3112rtm/wix311-binaries.zip" -OutFile "wix311.zip"
+          Expand-Archive -Path "wix311.zip" -DestinationPath "C:\wix311"
+          echo "C:\wix311" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          Write-Host "WiX Toolset installed"
+
+      - name: Verify WiX installation
+        run: |
+          candle -?
+          light -?
+
+      - name: Install AWS SDK C++
+        shell: pwsh
+        run: |
+          cd $env:GITHUB_WORKSPACE
+
+          # Install AWS SDK dependencies via vcpkg
+          vcpkg install aws-sdk-cpp[core,redshift,sts,sso,identity-management]:x64-windows
+
+          # Set environment variables for build
+          echo "AWS_SDK_PATH=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build PostgreSQL Client Library
+        shell: cmd
+        run: |
+          cd src\pgclient
+          call build64.bat
+        continue-on-error: false
+
+      - name: Build ODBC Driver with CMake
+        shell: pwsh
+        run: |
+          cd src\odbc\rsodbc
+
+          # Create build directory
+          New-Item -ItemType Directory -Force -Path build
+          cd build
+
+          # Configure with CMake
+          cmake .. -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
+            -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE\install"
+
+          # Build
+          cmake --build . --config Release --parallel
+
+          # Install
+          cmake --install . --config Release
+
+      - name: Prepare MSI build environment
+        shell: pwsh
+        run: |
+          # Set environment variables for MSI build
+          echo "PROJECT_DIR=$env:GITHUB_WORKSPACE\src\odbc\rsodbc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "DEPENDENCIES_INSTALL_DIR=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "RS_BUILD_TYPE=Release" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build MSI Installer
+        shell: cmd
+        working-directory: src/odbc/rsodbc/install
+        run: |
+          echo Building MSI for version %DRIVER_VERSION%
+
+          REM Set environment variables
+          set PROJECT_DIR=..\..\..\..
+          set DEPENDENCIES_INSTALL_DIR=%VCPKG_INSTALLATION_ROOT%\installed\x64-windows
+          set RS_BUILD_TYPE=Release
+          set VERSION=%DRIVER_VERSION%
+
+          REM Build MSI
+          call Make_x64.bat
+        env:
+          DRIVER_VERSION: ${{ github.event.inputs.version || env.DRIVER_VERSION }}
+
+      - name: Find and rename MSI
+        shell: pwsh
+        run: |
+          cd src\odbc\rsodbc\install
+
+          $msiFile = Get-ChildItem -Filter "AmazonRedshiftODBC64-*.msi" | Select-Object -First 1
+
+          if ($msiFile) {
+            $newName = "AmazonRedshiftODBC64-Ov2.1.13F1.0.0-BLL.msi"
+            Rename-Item -Path $msiFile.FullName -NewName $newName
+            Write-Host "MSI renamed to: $newName"
+
+            # Set output for artifact upload
+            echo "MSI_PATH=src\odbc\rsodbc\install\$newName" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            echo "MSI_NAME=$newName" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          } else {
+            Write-Error "MSI file not found!"
+            exit 1
+          }
+
+      - name: Calculate MSI checksum
+        shell: pwsh
+        run: |
+          $msiPath = "$env:GITHUB_WORKSPACE\$env:MSI_PATH"
+          $hash = Get-FileHash -Path $msiPath -Algorithm SHA256
+          $hashValue = $hash.Hash
+
+          # Save checksum to file
+          $checksumFile = "$msiPath.sha256"
+          "$hashValue  $env:MSI_NAME" | Out-File -FilePath $checksumFile -Encoding ascii
+
+          Write-Host "SHA256: $hashValue"
+          echo "MSI_CHECKSUM=$hashValue" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AmazonRedshiftODBC64-Ov2.1.13F1.0.0-BLL
+          path: |
+            ${{ env.MSI_PATH }}
+            ${{ env.MSI_PATH }}.sha256
+          retention-days: 90
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            ${{ env.MSI_PATH }}
+            ${{ env.MSI_PATH }}.sha256
+          body: |
+            ## Amazon Redshift ODBC Driver Ov2.1.13F1.0.0-BLL
+
+            **Version:** Ov2.1.13F1.0.0-BLL
+            **Release Date:** ${{ github.event.repository.updated_at }}
+            **Maintainer:** Orel Ashush
+            **Base Version:** AWS Amazon Redshift ODBC Driver v2.1.13.0
+
+            ### Complete AWS v2.1.13.0 Fork
+
+            This release includes ALL 13 improvements from AWS v2.1.13.0:
+
+            1. ✅ macOS Build Compatibility
+            2. ✅ SQLGetTypeInfo ODBC Version Support
+            3. ✅ IAMJwtPlugin Logging Enhancements
+            4. ✅ Escape Clause Handling
+            5. ✅ Descriptor Defaults Correction
+            6. ✅ Length Indicators for Non-String Types
+            7. ✅ Descriptor Error Messages
+            8. ✅ Error Handling Improvements
+            9. ✅ SQL_DESC_CONCISE_TYPE Synchronization
+            10. ✅ SQLGetData Octet Length Fix
+            11. ✅ Region Prioritization for CNAME
+            12. ✅ IdC Browser HTTPS Proxy Support
+            13. ✅ Changelog and Version Update
+
+            ### Installation
+
+            **Windows:**
+            ```cmd
+            msiexec /i AmazonRedshiftODBC64-Ov2.1.13F1.0.0-BLL.msi
+            ```
+
+            ### Checksums
+
+            **SHA256:** `${{ env.MSI_CHECKSUM }}`
+
+            ### Documentation
+
+            - See [CHANGES.md](docs/CHANGES.md) for detailed changelog
+            - See [TESTING.md](docs/TESTING.md) for testing procedures
+            - See [README.md](README.md) for overview
+
+            ### Credits
+
+            **AWS Contributors:**
+            - Ruei-Yang Huang (all 13 commits from v2.1.13.0)
+
+            **Fork Maintainer:**
+            - Orel Ashush (ORELASH)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build summary
+        shell: pwsh
+        run: |
+          Write-Host "========================================" -ForegroundColor Green
+          Write-Host "Build Summary" -ForegroundColor Green
+          Write-Host "========================================" -ForegroundColor Green
+          Write-Host "MSI File: $env:MSI_NAME" -ForegroundColor Cyan
+          Write-Host "SHA256: $env:MSI_CHECKSUM" -ForegroundColor Cyan
+          Write-Host "Location: $env:MSI_PATH" -ForegroundColor Cyan
+          Write-Host "========================================" -ForegroundColor Green
